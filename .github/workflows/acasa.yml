@@ -1,0 +1,46 @@
+name: Build Acasa APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Build APK
+        run: ./gradlew --no-daemon :mobile:assembleFossStableRelease
+
+      - name: Rename APK
+        run: |
+          mkdir -p out
+          cp mobile/build/outputs/apk/fossStable/release/*.apk out/Acasa.apk
+          ls -la out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Acasa-apk
+          path: out/Acasa.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Acasa build ${{ github.run_number }}
+          body: ${{ github.event.head_commit.message }}
+          files: out/Acasa.apk
+          make_latest: true

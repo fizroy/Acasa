@@ -40,11 +40,22 @@ android {
         applicationId "org.openhab.habdroid"
         minSdkVersion 23
         targetSdkVersion 36
-        versionCode 611
+        // Acasa: version code / build number follow the GitHub Actions run number
+        versionCode 100000 + (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toInteger()
         versionName "3.22.11-beta"
         multiDexEnabled true
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField "int", "ACASA_BUILD", (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
         buildConfigField "long", "TIMESTAMP", (System.getenv("SOURCE_DATE_EPOCH")?.toLong() ?: System.currentTimeMillis()) + "L"
+    }
+
+    signingConfigs {
+        acasa {
+            storeFile file("acasa.keystore")
+            storePassword "acasa123"
+            keyAlias "acasa"
+            keyPassword "acasa123"
+        }
     }
 
     buildTypes {
@@ -52,10 +63,16 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            // Acasa: same package name and key as the earlier debug builds, so it updates in place
+            applicationIdSuffix ".acasa"
+            signingConfig signingConfigs.acasa
         }
         debug {
             minifyEnabled false
             pseudoLocalesEnabled true
+            // Acasa: own package name so it installs next to the official openHAB app
+            applicationIdSuffix ".acasa"
+            signingConfig signingConfigs.acasa
         }
     }
 

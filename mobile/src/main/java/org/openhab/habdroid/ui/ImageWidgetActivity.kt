@@ -20,10 +20,12 @@ import android.util.Base64
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import java.io.IOException
 import kotlin.math.max
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -33,6 +35,7 @@ import org.openhab.habdroid.databinding.ActivityImageBinding
 import org.openhab.habdroid.util.HttpClient
 import org.openhab.habdroid.util.IconBackground
 import org.openhab.habdroid.util.ImageConversionPolicy
+import org.openhab.habdroid.util.MjpegInputStream
 import org.openhab.habdroid.util.ScreenLockMode
 import org.openhab.habdroid.util.determineDataUsagePolicy
 import org.openhab.habdroid.util.getConnectionFactory
@@ -65,6 +68,12 @@ class ImageWidgetActivity : AbstractBaseActivity() {
         connection = getConnectionFactory().currentActive?.conn?.connection
         if (connection == null) {
             finish()
+            return
+        }
+
+        val mjpegUrl = intent.getStringExtra(WIDGET_MJPEG_URL)
+        if (mjpegUrl != null) {
+            startMjpegStream(mjpegUrl)
             return
         }
 
@@ -108,7 +117,42 @@ class ImageWidgetActivity : AbstractBaseActivity() {
         }
     }
 
+    // Acasa: full screen MJPEG camera stream with pinch to zoom (zoom is kept between frames)
+    private fun startMjpegStream(url: String) {
+        val conn = connection ?: return finish()
+        binding.skeleton.showSkeleton()
+        refreshJob = launch(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    MjpegInputStream(conn.httpClient.get(url).response.byteStream()).use { stream ->
+                        while (isActive) {
+                            val bitmap = stream.readMjpegFrame()
+                            if (bitmap != null) withContext(Dispatchers.Main) {
+                                val matrix = Matrix()
+                                binding.photoView.apply {
+                                    getSuppMatrix(matrix)
+                                    setImageBitmap(bitmap)
+                                    setSuppMatrix(matrix)
+                                }
+                                binding.skeleton.showOriginal()
+                            }
+                        }
+                    }
+                } catch (e: HttpClient.HttpException) {
+                    Log.e(TAG, "MJPEG streaming from $url failed", e)
+                    break
+                } catch (e: IOException) {
+                    Log.e(TAG, "MJPEG streaming from $url was interrupted", e)
+                    delay(1000)
+                }
+            }
+        }
+    }
+
     private suspend fun loadImage() {
+        if (intent.getStringExtra(WIDGET_MJPEG_URL) != null) {
+            return
+        }
         val widgetUrl = intent.getStringExtra(WIDGET_URL)
         val conn = connection ?: return finish()
         binding.skeleton.showSkeleton()
@@ -191,5 +235,6 @@ class ImageWidgetActivity : AbstractBaseActivity() {
         const val WIDGET_REFRESH = "widget_refresh"
         const val WIDGET_URL = "widget_url"
         const val WIDGET_LINK = "widget_link"
+        const val WIDGET_MJPEG_URL = "widget_mjpeg_url"
     }
 }

@@ -52,22 +52,22 @@ open class DefaultConnection : AbstractConnection {
 
     private suspend fun createConnectedSocket(socketAddress: InetSocketAddress, network: Network?): Socket? {
         var retries = 0
-        while (retries < 10) {
+        while (retries < 3) {
             try {
                 val s = withContext(Dispatchers.IO) {
                     Socket().apply {
                         bindToNetworkIfPossible(network)
-                        connect(socketAddress, 1000)
+                        connect(socketAddress, 500)
                     }
                 }
                 Log.d(TAG, "Socket connected (attempt $retries)")
                 return s
             } catch (_: SocketTimeoutException) {
                 Log.d(TAG, "Socket timeout after $retries retries")
-                retries += 5 // Connect timeout is 1000ms, thus 5 * the retry timeout of 200ms
+                retries += 3 // Acasa: one 500ms attempt is enough to know the local server isn't there
             } catch (e: IOException) {
                 Log.d(TAG, "Socket creation failed (attempt  $retries): ${e.message}")
-                delay(200)
+                delay(100)
                 retries++
             }
         }

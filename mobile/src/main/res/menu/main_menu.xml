@@ -11,6 +11,12 @@
         app:showAsAction="always"
         app:iconTint="?android:textColorSecondary" />
     <item
+        android:id="@+id/mainmenu_acasa_update"
+        android:orderInCategory="900"
+        android:title="Caută update"
+        app:showAsAction="never"
+        tools:ignore="HardcodedText" />
+    <item
         android:id="@+id/mainmenu_poll_notifications"
         android:orderInCategory="1000"
         android:title="Poll notifications"

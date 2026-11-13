@@ -18,8 +18,9 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
 
-    <WebView
-        android:id="@+id/webview"
+    <!-- Acasa: the WebView is added at runtime from AcasaWebViewPool -->
+    <FrameLayout
+        android:id="@+id/webview_container"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 

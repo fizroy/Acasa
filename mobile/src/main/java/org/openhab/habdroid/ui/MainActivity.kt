@@ -31,6 +31,8 @@ import android.location.LocationManager
 import android.nfc.NfcAdapter
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
+import android.webkit.WebSettings
 import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.text.SpannableStringBuilder
@@ -255,6 +257,16 @@ class MainActivity : AbstractBaseActivity() {
 
         viewPool = RecyclerView.RecycledViewPool()
 
+        // Acasa: start the WebView engine while the app is idle, so the first schematic opens faster
+        Looper.myQueue().addIdleHandler {
+            try {
+                WebSettings.getDefaultUserAgent(this)
+            } catch (e: Exception) {
+                Log.d(TAG, "WebView warm-up failed", e)
+            }
+            false
+        }
+
         onBackPressedDispatcher.addCallback(this, onBackPressedCallback)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
@@ -451,6 +463,22 @@ class MainActivity : AbstractBaseActivity() {
         }
 
         showDataSaverHintSnackbarIfNeeded()
+
+        // Acasa: look for a newer build on GitHub (at most once a day)
+        launch {
+            AcasaUpdater.check(this@MainActivity, manual = false)
+        }
+    }
+
+    override fun onDestroy() {
+        AcasaWebViewPool.clear()
+        super.onDestroy()
+    }
+
+    fun launchAcasaInstall(apkUrl: String) {
+        launch {
+            AcasaUpdater.downloadAndInstall(this@MainActivity, apkUrl)
+        }
     }
 
     override fun onPause() {
@@ -512,6 +540,13 @@ class MainActivity : AbstractBaseActivity() {
         return when (item.itemId) {
             R.id.mainmenu_voice_recognition -> {
                 launchVoiceRecognition()
+                true
+            }
+
+            R.id.mainmenu_acasa_update -> {
+                launch {
+                    AcasaUpdater.check(this@MainActivity, manual = true)
+                }
                 true
             }
 

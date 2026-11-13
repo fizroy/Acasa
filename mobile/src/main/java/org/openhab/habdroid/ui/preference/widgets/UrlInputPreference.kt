@@ -97,7 +97,6 @@ class UrlInputPreference(context: Context, attrs: AttributeSet) : CustomInputTyp
 
         override fun afterTextChanged(editable: Editable) {
             var portSeemsInvalid = false
-            val isForRemoteServer = requireArguments().getBoolean(IS_FOR_REMOTE_SERVER, false)
             var url: HttpUrl? = null
             if (editable.isEmpty()) {
                 urlIsValid = true
@@ -112,11 +111,7 @@ class UrlInputPreference(context: Context, attrs: AttributeSet) : CustomInputTyp
                         portSeemsInvalid = when {
                             url.isHttps -> url.port == 80 || url.port == 8080
 
-                            isForRemoteServer -> {
-                                urlIsValid = false
-                                false
-                            }
-
+                            // Acasa: plain HTTP is allowed for the remote server too
                             else -> url.port == 443 || url.port == 8443
                         }
                     } catch (e: IllegalArgumentException) {
@@ -125,7 +120,7 @@ class UrlInputPreference(context: Context, attrs: AttributeSet) : CustomInputTyp
                 }
             }
             val errorRes = when {
-                !urlIsValid -> if (isForRemoteServer) R.string.error_invalid_https_url else R.string.error_invalid_url
+                !urlIsValid -> R.string.error_invalid_url
                 portSeemsInvalid -> R.string.error_port_seems_invalid
                 url?.host == "home.myopenhab.org" -> R.string.error_home_myopenhab_org_no_notifications
                 else -> 0

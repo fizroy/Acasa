@@ -17,7 +17,10 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.graphics.drawable.Animatable
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.util.Base64
@@ -25,6 +28,8 @@ import android.util.Log
 import androidx.appcompat.widget.AppCompatImageView
 import com.faltenreich.skeletonlayout.SkeletonConfig
 import com.faltenreich.skeletonlayout.SkeletonLayout
+import java.io.IOException
+import java.nio.ByteBuffer
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +37,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.openhab.habdroid.R
 import org.openhab.habdroid.core.connection.Connection
 import org.openhab.habdroid.ui.widget.WidgetImageView.ImageScalingType
@@ -44,6 +51,7 @@ import org.openhab.habdroid.util.getIconFallbackColor
 import org.openhab.habdroid.util.getPrefs
 import org.openhab.habdroid.util.isDebugModeEnabled
 import org.openhab.habdroid.util.resolveThemedColor
+import org.openhab.habdroid.util.toBitmap
 
 class WidgetImageView(context: Context, attrs: AttributeSet?, private val imageView: InternalImageView) :
     SkeletonLayout(context, attrs, config = createConfig(context)),
@@ -195,6 +203,7 @@ class WidgetImageView(context: Context, attrs: AttributeSet?, private val imageV
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
             scope = CoroutineScope(Dispatchers.Main + Job())
+            (drawable as? Animatable)?.start()
 
             if (pendingRequest != null) {
                 executePendingRequestIfReady()
@@ -212,6 +221,7 @@ class WidgetImageView(context: Context, attrs: AttributeSet?, private val imageV
         }
 
         override fun onDetachedFromWindow() {
+            (drawable as? Animatable)?.stop()
             super.onDetachedFromWindow()
             scope?.cancel()
             scope = null
@@ -339,6 +349,14 @@ class WidgetImageView(context: Context, attrs: AttributeSet?, private val imageV
             internalLoad = false
         }
 
+        private fun applyLoadedAnimatedDrawable(d: Drawable) {
+            loadProgressCallback?.invoke(false)
+            internalLoad = true
+            super.setImageDrawable(d)
+            internalLoad = false
+            (d as? Animatable)?.start()
+        }
+
         override fun applyFallbackDrawable() {
             if (originalScaleType == null) {
                 originalScaleType = scaleType
@@ -388,14 +406,30 @@ class WidgetImageView(context: Context, attrs: AttributeSet?, private val imageV
                             else -> ImageConversionPolicy.PreferSourceSize
                         }
                         val fallbackColor = context.getIconFallbackColor(IconBackground.APP_THEME)
-                        val bitmap = client
+                        val result = client
                             .get(actualUrl.toString(), timeoutMillis = timeoutMillis, caching = cachingMode)
-                            .asBitmap(size, fallbackColor, conversionPolicy)
-                            .response
-                        CacheManager.getInstance(context).cacheBitmap(url, bitmap, fallbackColor)
-                        applyLoadedBitmap(bitmap)
+                            .asBytes()
+                        val bytes = result.response
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && isAnimatedGif(bytes)) {
+                            // Animated GIF: keep it animated instead of flattening it to a bitmap
+                            val animated = withContext(Dispatchers.IO) {
+                                ImageDecoder.decodeDrawable(ImageDecoder.createSource(ByteBuffer.wrap(bytes)))
+                            }
+                            applyLoadedAnimatedDrawable(animated)
+                        } else {
+                            val bitmap = withContext(Dispatchers.IO) {
+                                bytes.toResponseBody(result.contentType)
+                                    .toBitmap(size, fallbackColor, conversionPolicy)
+                            }
+                            CacheManager.getInstance(context).cacheBitmap(url, bitmap, fallbackColor)
+                            applyLoadedBitmap(bitmap)
+                        }
                         lastRefreshTimestamp = SystemClock.uptimeMillis()
                         scheduleNextRefreshIfNeeded()
+                    } catch (e: IOException) {
+                        Log.d(TAG, "Failed to decode image '$url'", e)
+                        loadProgressCallback?.invoke(false)
+                        applyFallbackDrawable()
                     } catch (e: HttpClient.HttpException) {
                         if (context.getPrefs().isDebugModeEnabled()) {
                             Log.d(TAG, "Failed to load image '$url', HTTP code ${e.statusCode}", e)
@@ -438,6 +472,11 @@ class WidgetImageView(context: Context, attrs: AttributeSet?, private val imageV
 
     companion object {
         private val TAG = WidgetImageView::class.java.simpleName
+
+        // GIF87a / GIF89a magic bytes, independent of the file extension or content type sent by the server
+        internal fun isAnimatedGif(bytes: ByteArray): Boolean = bytes.size > 6 &&
+            bytes[0] == 'G'.code.toByte() && bytes[1] == 'I'.code.toByte() && bytes[2] == 'F'.code.toByte() &&
+            bytes[3] == '8'.code.toByte()
         private fun createConfig(context: Context) = SkeletonConfig.default(context).apply {
             maskColor = context.resolveThemedColor(R.attr.skeletonBackground, maskColor)
             shimmerColor = context.resolveThemedColor(R.attr.skeletonShimmer, shimmerColor)

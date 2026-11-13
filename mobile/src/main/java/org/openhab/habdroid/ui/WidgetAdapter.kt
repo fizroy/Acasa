@@ -32,6 +32,7 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.webkit.WebChromeClient
 import android.webkit.WebView
+import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.TextView
 import androidx.annotation.CallSuper
@@ -352,7 +353,10 @@ class WidgetAdapter(
         // If visibility of a container with at least one child changes, refresh the whole list to make sure
         // the child visibility is also updated. Otherwise it's sufficient to update the single widget only.
         if (oldWidget.visibility != widget.visibility && items.any { w -> w.parentId == widget.id }) {
-            notifyDataSetChanged()
+            // Acasa: only redraw the container and its descendants instead of the whole page
+            val positions = mutableListOf(position)
+            collectDescendantPositions(widget.id, positions)
+            positions.forEach { notifyItemChanged(it) }
         } else {
             // update the parent Buttongrid if the updated widget is a button
             if (widget.type == Widget.Type.Button && widget.parentId != null) {
@@ -368,6 +372,16 @@ class WidgetAdapter(
 
     private fun updateFirstVisibleWidgetPosition() {
         firstVisibleWidgetPosition = items.indexOfFirst { w -> shouldShowWidget(w) }
+    }
+
+    private fun collectDescendantPositions(parentId: String, out: MutableList<Int>) {
+        widgetsByParentId[parentId]?.forEach { child ->
+            val pos = items.indexOfFirst { w -> w.id == child.id }
+            if (pos >= 0 && pos !in out) {
+                out.add(pos)
+                collectDescendantPositions(child.id, out)
+            }
+        }
     }
 
     private tailrec fun shouldShowWidget(widget: Widget): Boolean {
@@ -1819,42 +1833,124 @@ class WidgetAdapter(
         }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     class WebViewHolder internal constructor(initData: ViewHolderInitData) :
         HeavyDataViewHolder(initData, R.layout.widgetlist_webitem) {
         private val binding = WidgetlistWebitemBinding.bind(itemView)
-        override val widgetContentView get() = binding.webview
+        override val widgetContentView get() = binding.webviewContainer
         override val dataSaverBinding get() = binding.dataSaver
         override val iconTextBinding get() = binding.icontext
 
-        init {
-            binding.webview.webChromeClient = object : WebChromeClient() {
-                override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    binding.progressBar.apply {
-                        if (newProgress == 100) {
-                            hide()
-                        } else {
-                            show()
-                        }
-                        progress = newProgress
+        // Acasa: the WebView comes from AcasaWebViewPool and is only reloaded when its URL changes
+        private var webView: WebView? = null
+        private var loadedUrl: String? = null
+
+        private val chromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                if (view !== webView) {
+                    return
+                }
+                binding.progressBar.apply {
+                    if (newProgress == 100) {
+                        hide()
+                    } else {
+                        show()
                     }
+                    progress = newProgress
                 }
             }
         }
 
-        @SuppressLint("SetJavaScriptEnabled")
         override fun bindAfterDataSaverCheck(widget: Widget) {
-            val url = widget.url?.let {
-                connection.httpClient.buildUrl(it)
+            binding.webviewContainer.adjustForWidgetHeight(widget, 0)
+            val url = widget.url?.let { connection.httpClient.buildUrl(it) }?.toString()
+            if (url == null) {
+                releaseWebView()
+                return
             }
-            binding.webview.apply {
-                adjustForWidgetHeight(widget, 0)
-                loadUrl(ConnectionWebViewClient.EMPTY_PAGE)
+            val current = webView
+            if (current != null && url == loadedUrl && AcasaWebViewPool.isUsable(current) &&
+                (current.parent == null || current.parent === binding.webviewContainer)
+            ) {
+                // Same page already loaded: don't reload it on every widget update
+                attachWebView(current)
+                return
+            }
+            releaseWebView()
+            val (wv, alreadyLoaded) = AcasaWebViewPool.obtain(itemView.context, url)
+            attachWebView(wv)
+            if (alreadyLoaded) {
+                binding.progressBar.hide()
+            } else {
+                wv.setUpForConnection(connection)
+                wv.loadUrl(url)
+            }
+            loadedUrl = url
+        }
 
-                if (url != null) {
-                    setUpForConnection(connection)
-                    loadUrl(url.toString())
-                }
+        override fun onStart() {
+            val wv = webView ?: return
+            if (!AcasaWebViewPool.isUsable(wv) || (wv.parent != null && wv.parent !== binding.webviewContainer)) {
+                // Our WebView was taken over or destroyed meanwhile, get a new one
+                webView = null
+                loadedUrl = null
+                boundWidget?.let { bindAfterDataSaverCheck(it) }
+                return
             }
+            attachWebView(wv)
+            wv.onResume()
+        }
+
+        override fun onStop() {
+            webView?.onPause()
+        }
+
+        override fun onDetached() {
+            // Hand the WebView back while we're off screen, so another page can reuse it
+            webView?.let { binding.webviewContainer.removeView(it) }
+        }
+
+        override fun onRecycled() {
+            releaseWebView()
+        }
+
+        private fun setUpWebView(wv: WebView) {
+            wv.webChromeClient = chromeClient
+            wv.setBackgroundColor(itemView.context.resolveThemedColor(android.R.attr.colorBackground))
+            wv.settings.offscreenPreRaster = true
+            // Let the web page scroll by itself: while a finger is on the WebView,
+            // don't let the widget list (or pull-to-refresh) steal the gesture.
+            wv.setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                        v.parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                false
+            }
+        }
+
+        private fun attachWebView(wv: WebView) {
+            webView = wv
+            if (wv.parent === binding.webviewContainer) {
+                return
+            }
+            (wv.parent as? ViewGroup)?.removeView(wv)
+            setUpWebView(wv)
+            binding.webviewContainer.addView(
+                wv,
+                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+        }
+
+        private fun releaseWebView() {
+            webView?.let {
+                it.onPause()
+                AcasaWebViewPool.release(it)
+            }
+            webView = null
+            loadedUrl = null
         }
     }
 
@@ -1974,8 +2070,24 @@ class WidgetAdapter(
         override val iconTextBinding get() = binding.icontext
         private var streamer: MjpegStreamer? = null
 
+        init {
+            binding.player.setOnClickListener { handleRowClick() }
+        }
+
         override fun bindAfterDataSaverCheck(widget: Widget) {
             streamer = widget.url?.let { MjpegStreamer(binding.player, connection, it) }
+        }
+
+        // Acasa: tap a camera to open it full screen with pinch to zoom
+        override fun handleRowClick() {
+            val widget = boundWidget ?: return
+            val url = widget.url ?: return
+            val context = itemView.context
+            val intent = Intent(context, ImageWidgetActivity::class.java).apply {
+                putExtra(ImageWidgetActivity.WIDGET_LABEL, widget.label)
+                putExtra(ImageWidgetActivity.WIDGET_MJPEG_URL, url)
+            }
+            context.startActivity(intent)
         }
 
         override fun onStart() {

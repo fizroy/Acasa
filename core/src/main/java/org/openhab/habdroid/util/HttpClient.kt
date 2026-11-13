@@ -248,6 +248,16 @@ class HttpClient(client: OkHttpClient, baseUrl: String?, username: String?, pass
             close()
         }
 
+        @Throws(HttpException::class)
+        suspend fun asBytes(): HttpBytesResult = try {
+            val bytes = withContext(Dispatchers.IO) { response.bytes() }
+            HttpBytesResult(request, bytes, response.contentType())
+        } catch (e: IOException) {
+            throw HttpException(request, originalUrl, e)
+        } finally {
+            close()
+        }
+
         suspend fun asStatus(): HttpStatusResult {
             close()
             return HttpStatusResult(request, statusCode)
@@ -275,6 +285,12 @@ class HttpClient(client: OkHttpClient, baseUrl: String?, username: String?, pass
     class HttpTextResult internal constructor(val request: Request, val response: String, val headers: Headers)
 
     class HttpBitmapResult internal constructor(val request: Request, val response: Bitmap)
+
+    class HttpBytesResult internal constructor(
+        val request: Request,
+        val response: ByteArray,
+        val contentType: okhttp3.MediaType?
+    )
 
     class HttpException : Exception {
         val request: Request

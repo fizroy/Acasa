@@ -18,6 +18,7 @@ import android.content.Context
 import android.os.Build
 import android.view.View
 import android.view.inputmethod.InputMethodManager
+import android.webkit.WebSettings
 import android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
 import android.webkit.WebView
 import android.webkit.WebViewDatabase
@@ -49,6 +50,8 @@ fun WebView.setUpForConnection(connection: Connection) {
         @SuppressLint("SetJavaScriptEnabled")
         javaScriptEnabled = true
         mixedContentMode = MIXED_CONTENT_COMPATIBILITY_MODE
+        // Acasa: use the HTTP cache like a browser does
+        cacheMode = WebSettings.LOAD_DEFAULT
     }
 
     webViewClient = ConnectionWebViewClient(connection)
